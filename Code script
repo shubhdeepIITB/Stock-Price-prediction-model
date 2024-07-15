@@ -1,0 +1,150 @@
+# Install necessary library packages
+!pip install tensorflow
+!pip install scikit-learn
+!pip install yfinance
+!pip install numpy
+!pip install pandas
+!pip install matplotlib
+
+import yfinance as yf
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+
+# Function to download stock data
+def download_stock_data(ticker, start_date, end_date):
+    stock_data = yf.download(ticker, start=start_date, end=end_date)
+    return stock_data
+
+# Function to prepare data for LSTM model
+def prepare_data(data, time_steps):
+    x, y = [], []
+    for i in range(len(data) - time_steps):
+        x.append(data[i:(i + time_steps)])
+        y.append(data[i + time_steps])
+    return np.array(x), np.array(y)
+
+# Set random seed for reproducibility
+np.random.seed(42)
+
+# Download stock data
+stock_symbol = "GOOG"
+start_date = "2010-01-01"  # Adjust the start date to have more historical data
+end_date = "2024-05-31"
+stock_data = download_stock_data(stock_symbol, start_date, end_date)
+
+# Prepare closing prices data
+closing_prices = stock_data['Close'].values.reshape(-1, 1)
+
+# Scale data
+scaler = MinMaxScaler(feature_range=(0, 1))
+closing_prices_scaled = scaler.fit_transform(closing_prices)
+
+# Prepare data with time steps
+time_steps = 60
+x, y = prepare_data(closing_prices_scaled, time_steps)
+
+# Split data into training and testing sets
+split_ratio = 0.8
+split_index = int(len(x) * split_ratio)
+x_train, x_test = x[:split_index], x[split_index:]
+y_train, y_test = y[:split_index], y[split_index:]
+
+# Build LSTM model
+model = Sequential()
+model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
+model.add(LSTM(units=50))
+model.add(Dense(units=1))
+model.compile(optimizer='adam', loss='mean_squared_error')
+
+# Train the model
+model.fit(x_train, y_train, epochs=200, batch_size=32)  # Increase epochs for better learning # optimal batch size = 32, 64
+
+# Function to predict future prices
+def predict_future_prices(model, last_data, future_days, scaler):
+    future_predictions = []
+    current_input = last_data.copy()
+
+    for _ in range(future_days):
+        predicted_price_scaled = model.predict(current_input)
+        predicted_price = scaler.inverse_transform(predicted_price_scaled)
+        future_predictions.append(predicted_price[0][0])
+
+        # Update current_input with the latest prediction
+        current_input = np.append(current_input[:, 1:, :], predicted_price_scaled.reshape(1, 1, 1), axis=1)
+
+    return future_predictions
+
+# Number of days to predict into the future
+future_days = 200
+
+# Prepare the last data for prediction
+last_data = closing_prices_scaled[-time_steps:]
+last_data = last_data.reshape(1, time_steps, 1)
+
+# Get future price predictions
+future_predictions = predict_future_prices(model, last_data, future_days, scaler)
+
+# Predict prices for the historical data
+historical_predictions = model.predict(x)
+
+# Inverse transform the historical predictions to original scale
+historical_predictions = scaler.inverse_transform(historical_predictions).flatten()
+
+# Plotting the results
+plt.figure(figsize=(12, 6))
+
+# Plot actual prices
+plt.plot(np.arange(len(closing_prices)), closing_prices, label='Actual Prices')
+
+# Plot predicted prices for historical data
+plt.plot(np.arange(time_steps, len(closing_prices)), historical_predictions, label='Predicted Prices (Historical)')
+
+# Plot future predicted prices
+plt.plot(np.arange(len(closing_prices), len(closing_prices) + future_days), future_predictions, label='Predicted Prices (Future)')
+
+plt.xlabel('Time')
+plt.ylabel('Price')
+plt.title('Actual vs Predicted Prices')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+
+# Determine the trend of predicted prices
+def determine_trend(prices):
+    trend = "Unknown"
+    if len(prices) >= 2:
+        if prices[-1] > prices[-2]:
+            trend = "Upward"
+        elif prices[-1] < prices[-2]:
+            trend = "Downward"
+        else:
+            trend = "Stable"
+    return trend
+
+# Analyze the trend of historical predictions
+historical_trend = determine_trend(historical_predictions)
+
+# Analyze the trend of future predictions
+future_trend = determine_trend(future_predictions)
+
+# Print the trends
+print(f"Trend of Historical Predictions: {historical_trend}")
+print(f"Trend of Future Predictions: {future_trend}")
+
+# Generate buy/sell call based on the trend analysis
+def generate_buy_sell_call(historical_trend, future_trend):
+    if historical_trend == "Upward" and future_trend == "Upward":
+        return "Buy"
+    elif historical_trend == "Downward" and future_trend == "Downward":
+        return "Sell"
+    else:
+        return "Hold"
+
+# Generate the buy/sell call
+buy_sell_call = generate_buy_sell_call(historical_trend, future_trend)
+print(f"Buy/Sell Call: {buy_sell_call}")
